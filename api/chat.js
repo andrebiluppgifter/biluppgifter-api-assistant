@@ -194,7 +194,7 @@ export default async function handler(req) {
   }
 
   // Bestäm modell — låt klienten välja från whitelisten, annars default
-  const chosenModel = ALLOWED_MODELS.has(model) ? model : 'claude-sonnet-4-5';
+  const chosenModel = ALLOWED_MODELS.has(model) ? model : 'claude-haiku-4-5';
 
   // Skala bort eventuell skräp från meddelandena
   const sanitizedMessages = messages
