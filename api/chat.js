@@ -151,11 +151,8 @@ Dessutom finns däck-/fälg-fält direkt i \`VehicleDto\`: \`tyre_dimension_fron
 - Kontakt: info@biluppgifter.se
 `;
 
-const ALLOWED_MODELS = new Set([
-  'claude-sonnet-4-5',
-  'claude-opus-4-5',
-  'claude-haiku-4-5',
-]);
+// Modellen är låst till Haiku i den här appen för kostnadskontroll.
+const MODEL = 'claude-haiku-4-5';
 
 export default async function handler(req) {
   if (req.method !== 'POST') {
@@ -185,7 +182,7 @@ export default async function handler(req) {
     });
   }
 
-  const { messages, model } = body || {};
+  const { messages, user_email } = body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return new Response(JSON.stringify({ error: 'messages[] required' }), {
       status: 400,
@@ -193,8 +190,16 @@ export default async function handler(req) {
     });
   }
 
-  // Bestäm modell — låt klienten välja från whitelisten, annars default
-  const chosenModel = ALLOWED_MODELS.has(model) ? model : 'claude-haiku-4-5';
+  // Kräv giltig email — gate för att få använda assistenten
+  if (!user_email || typeof user_email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user_email)) {
+    return new Response(JSON.stringify({ error: 'user_email required (valid email)' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  // Logga email per request så det är spårbart i Vercel-loggar
+  console.log('chat request from', user_email.slice(0, 200));
 
   // Skala bort eventuell skräp från meddelandena
   const sanitizedMessages = messages
@@ -216,7 +221,7 @@ export default async function handler(req) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: chosenModel,
+      model: MODEL,
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       stream: true,
