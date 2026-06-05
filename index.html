@@ -432,6 +432,109 @@
   }
   .icon-btn:hover { color: var(--accent); background: var(--accent-soft); }
 
+  /* Email pill in header */
+  .email-pill {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid #ffd9b8;
+    padding: 6px 10px 6px 8px;
+    border-radius: 999px;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+    font-family: inherit;
+    max-width: 240px;
+  }
+  .email-pill:hover { background: #ffeacd; border-color: var(--accent); }
+  .email-pill span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 200px;
+  }
+
+  /* Email gate overlay */
+  .gate-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  .gate-card {
+    background: var(--panel);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    max-width: 440px;
+    width: 100%;
+    padding: 32px 28px;
+    text-align: center;
+  }
+  .gate-card .logo-large {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto 16px;
+  }
+  .gate-card .logo-large img { width: 100%; height: 100%; object-fit: contain; }
+  .gate-card h2 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    color: var(--text);
+  }
+  .gate-card p {
+    margin: 0 0 20px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .gate-card form { display: flex; flex-direction: column; gap: 10px; }
+  .gate-card input {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: inherit;
+    color: var(--text);
+    text-align: center;
+  }
+  .gate-card input:focus { outline: none; border-color: var(--accent); background: var(--panel); }
+  .gate-card input.error { border-color: var(--danger); background: #fef2f2; }
+  .gate-card button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    font-family: inherit;
+  }
+  .gate-card button:hover { background: var(--accent-2); }
+  .gate-card .err-msg {
+    color: var(--danger);
+    font-size: 12.5px;
+    min-height: 16px;
+    margin-top: -4px;
+  }
+  .gate-card .privacy {
+    margin-top: 16px;
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
   /* Footer note */
   .footer-attribution {
     text-align: center;
@@ -465,11 +568,13 @@
     </div>
   </div>
   <div class="actions">
-    <span id="apiStatus" class="status-pill">Klar</span>
+    <button class="email-pill" id="emailPill" title="Byt email">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+      <span id="emailPillText">—</span>
+    </button>
     <button class="icon-btn" id="resetBtn" title="Ny konversation">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
     </button>
-    <button class="btn" id="settingsBtn">Inställningar</button>
   </div>
 </header>
 
@@ -501,25 +606,41 @@
   </div>
 </footer>
 
+<div class="gate-overlay" id="gateOverlay" style="display:none">
+  <div class="gate-card">
+    <div class="logo-large"><img src="/plate.svg" alt="Biluppgifter"></div>
+    <h2>Välkommen till Biluppgifter API Assistant</h2>
+    <p>Ange ditt namn och din arbets-email för att komma åt assistenten. Vi använder uppgifterna för att hålla koll på vilka som ställer frågor och kunna följa upp om relevant.</p>
+    <form id="gateForm" autocomplete="off">
+      <input type="text" id="gateName" placeholder="För- och efternamn" required autofocus />
+      <input type="email" id="gateEmail" placeholder="din@arbetsmail.se" required />
+      <div class="err-msg" id="gateError"></div>
+      <button type="submit">Fortsätt</button>
+    </form>
+    <div class="privacy">Adressen lagras i din webbläsare och i Vercel-loggen för den här tjänsten. Vi delar inte den med tredje part.</div>
+  </div>
+</div>
+
 <dialog id="settingsDialog">
   <div class="dialog-header">
-    <h2>Inställningar</h2>
+    <h2>Email</h2>
     <button class="icon-btn" id="closeSettingsBtn">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
     </button>
   </div>
   <div class="dialog-body">
     <div class="field">
-      <label for="model">Modell</label>
-      <select id="model">
-        <option value="claude-haiku-4-5">Claude Haiku 4.5 (snabbast + billigast, rekommenderas)</option>
-        <option value="claude-sonnet-4-5">Claude Sonnet 4.5 (mer eftertänksam)</option>
-        <option value="claude-opus-4-5">Claude Opus 4.5 (bäst kvalitet, dyrast)</option>
-      </select>
-      <div class="hint">API-nyckeln hanteras server-side på Vercel. Inget behöver konfigureras i webbläsaren.</div>
+      <label for="changeName">Ditt namn</label>
+      <input type="text" id="changeName" placeholder="För- och efternamn" />
+    </div>
+    <div class="field">
+      <label for="changeEmail">Din arbets-email</label>
+      <input type="email" id="changeEmail" placeholder="din@arbetsmail.se" />
+      <div class="hint">Uppgifterna följer med varje fråga och loggas på servern. Vill du börja om med en annan adress: ändra här eller klicka "Logga ut" för att rensa lokala data.</div>
     </div>
   </div>
   <div class="dialog-footer">
+    <button class="btn ghost" id="logoutBtn">Logga ut</button>
     <button class="btn ghost" id="cancelSettingsBtn">Avbryt</button>
     <button class="btn primary" id="saveSettingsBtn">Spara</button>
   </div>
@@ -531,7 +652,8 @@
 /* ========= TILLSTÅND ========= */
 
 const state = {
-  model: localStorage.getItem('bil_model') || 'claude-haiku-4-5',
+  userEmail: localStorage.getItem('bil_user_email') || '',
+  userName: localStorage.getItem('bil_user_name') || '',
   messages: [],
 };
 
@@ -543,15 +665,93 @@ const welcomeEl = $('welcome');
 const inputEl = $('input');
 const composerEl = $('composer');
 const sendBtn = $('sendBtn');
-const settingsBtn = $('settingsBtn');
+const emailPill = $('emailPill');
+const emailPillText = $('emailPillText');
 const settingsDialog = $('settingsDialog');
-const modelEl = $('model');
+const changeNameEl = $('changeName');
+const changeEmailEl = $('changeEmail');
 const saveSettingsBtn = $('saveSettingsBtn');
 const cancelSettingsBtn = $('cancelSettingsBtn');
 const closeSettingsBtn = $('closeSettingsBtn');
-const apiStatus = $('apiStatus');
+const logoutBtn = $('logoutBtn');
 const resetBtn = $('resetBtn');
 const mainEl = $('main');
+const gateOverlay = $('gateOverlay');
+const gateForm = $('gateForm');
+const gateName = $('gateName');
+const gateEmail = $('gateEmail');
+const gateError = $('gateError');
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/* ========= EMAIL GATE ========= */
+
+function showGate() {
+  gateOverlay.style.display = 'flex';
+  setTimeout(() => gateName.focus(), 50);
+}
+function hideGate() { gateOverlay.style.display = 'none'; }
+function updateEmailPill() {
+  // Visa namn om vi har det, annars email
+  const label = state.userName ? state.userName : (state.userEmail || '—');
+  emailPillText.textContent = label;
+  emailPill.style.display = state.userEmail ? 'inline-flex' : 'none';
+}
+
+async function trackUser(name, email) {
+  // Skicka namn + email till backend som vidarebefordrar till Google Sheet.
+  // Best-effort: vi blockerar inte användaren om det failar.
+  try {
+    await fetch('/api/track-user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email }),
+    });
+  } catch (e) {
+    console.warn('track-user failed (non-blocking):', e);
+  }
+}
+
+gateForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const nameValue = gateName.value.trim();
+  const emailValue = gateEmail.value.trim();
+  if (nameValue.length < 2) {
+    gateError.textContent = 'Ange ditt namn (minst 2 tecken).';
+    gateName.classList.add('error');
+    return;
+  }
+  if (!EMAIL_RE.test(emailValue)) {
+    gateError.textContent = 'Ange en giltig email-adress.';
+    gateEmail.classList.add('error');
+    return;
+  }
+  const isNewEmail = emailValue !== state.userEmail;
+  state.userName = nameValue;
+  state.userEmail = emailValue;
+  localStorage.setItem('bil_user_name', nameValue);
+  localStorage.setItem('bil_user_email', emailValue);
+  updateEmailPill();
+  hideGate();
+  inputEl.focus();
+  // Logga till Sheet bara om det är en ny adress (eller första gången) — kör async, blockerar inte
+  if (isNewEmail) trackUser(nameValue, emailValue);
+});
+gateName.addEventListener('input', () => {
+  gateError.textContent = '';
+  gateName.classList.remove('error');
+});
+gateEmail.addEventListener('input', () => {
+  gateError.textContent = '';
+  gateEmail.classList.remove('error');
+});
+
+// Visa gate om ingen email finns ännu
+if (!state.userEmail) {
+  showGate();
+} else {
+  updateEmailPill();
+}
 
 /* ========= INITIERING ========= */
 
@@ -581,16 +781,46 @@ document.querySelectorAll('.example').forEach(btn => {
   });
 });
 
-settingsBtn.addEventListener('click', () => {
-  modelEl.value = state.model;
+emailPill.addEventListener('click', () => {
+  changeNameEl.value = state.userName || '';
+  changeEmailEl.value = state.userEmail || '';
   settingsDialog.showModal();
 });
 closeSettingsBtn.addEventListener('click', () => settingsDialog.close());
 cancelSettingsBtn.addEventListener('click', () => settingsDialog.close());
 saveSettingsBtn.addEventListener('click', () => {
-  state.model = modelEl.value;
-  localStorage.setItem('bil_model', state.model);
+  const nameValue = changeNameEl.value.trim();
+  const emailValue = changeEmailEl.value.trim();
+  if (nameValue.length < 2) {
+    alert('Ange ditt namn (minst 2 tecken).');
+    return;
+  }
+  if (!EMAIL_RE.test(emailValue)) {
+    alert('Ange en giltig email-adress.');
+    return;
+  }
+  const isNewEmail = emailValue !== state.userEmail;
+  state.userName = nameValue;
+  state.userEmail = emailValue;
+  localStorage.setItem('bil_user_name', nameValue);
+  localStorage.setItem('bil_user_email', emailValue);
+  updateEmailPill();
   settingsDialog.close();
+  // Om det är en ny email — logga den också (de uppdaterade sina uppgifter)
+  if (isNewEmail) trackUser(nameValue, emailValue);
+});
+logoutBtn.addEventListener('click', () => {
+  if (!confirm('Logga ut och rensa lokala data?')) return;
+  state.userEmail = '';
+  state.userName = '';
+  state.messages = [];
+  localStorage.removeItem('bil_user_email');
+  localStorage.removeItem('bil_user_name');
+  chatEl.innerHTML = '';
+  welcomeEl.style.display = '';
+  updateEmailPill();
+  settingsDialog.close();
+  showGate();
 });
 
 resetBtn.addEventListener('click', () => {
@@ -710,7 +940,8 @@ async function sendMessage(text) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: state.model,
+        user_email: state.userEmail,
+        user_name: state.userName,
         messages: state.messages,
       }),
     });
