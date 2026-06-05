@@ -182,7 +182,7 @@ export default async function handler(req) {
     });
   }
 
-  const { messages, user_email } = body || {};
+  const { messages, user_email, user_name } = body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return new Response(JSON.stringify({ error: 'messages[] required' }), {
       status: 400,
@@ -198,8 +198,9 @@ export default async function handler(req) {
     });
   }
 
-  // Logga email per request så det är spårbart i Vercel-loggar
-  console.log('chat request from', user_email.slice(0, 200));
+  // Logga namn + email per request så det är spårbart i Vercel-loggar
+  const nameForLog = user_name && typeof user_name === 'string' ? user_name.slice(0, 200) : '(no name)';
+  console.log('chat request from', nameForLog, '<' + user_email.slice(0, 200) + '>');
 
   // Skala bort eventuell skräp från meddelandena
   const sanitizedMessages = messages
