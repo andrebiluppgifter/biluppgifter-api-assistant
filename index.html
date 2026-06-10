@@ -698,14 +698,26 @@ function updateEmailPill() {
   emailPill.style.display = state.userEmail ? 'inline-flex' : 'none';
 }
 
+// Apps Script Web App som tar emot lead-data och skriver rad i Google Sheet.
+const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyOHocPhDRbftCwchYCO9E47w9rkcAfTuLnEt8x-_Yp39Q9RXkHhc8_33au9Q_rLjAsJQ/exec';
+
 async function trackUser(name, email) {
-  // Skicka namn + email till backend som vidarebefordrar till Google Sheet.
-  // Best-effort: vi blockerar inte användaren om det failar.
+  // Skicka direkt från frontend till Apps Script — fire-and-forget.
+  // Vi använder mode: 'no-cors' eftersom Apps Script inte sätter CORS-headers.
+  // Det innebär att vi inte kan läsa svaret, men datan skickas och Apps Script skriver raden.
   try {
-    await fetch('/api/track-user', {
+    await fetch(SHEET_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email }),
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        name,
+        email,
+        user_agent: navigator.userAgent || '',
+        referrer: document.referrer || '',
+        timestamp_iso: new Date().toISOString(),
+        source: 'biluppgifter-api-assistant',
+      }),
     });
   } catch (e) {
     console.warn('track-user failed (non-blocking):', e);
