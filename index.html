@@ -607,17 +607,24 @@
 </footer>
 
 <div class="gate-overlay" id="gateOverlay" style="display:none">
-  <div class="gate-card">
+  <div class="gate-card" id="gateCardForm">
     <div class="logo-large"><img src="/plate.svg" alt="Biluppgifter"></div>
     <h2>Välkommen till Biluppgifter API Assistant</h2>
-    <p>Ange ditt namn och din arbets-email för att komma åt assistenten. Vi använder uppgifterna för att hålla koll på vilka som ställer frågor och kunna följa upp om relevant.</p>
+    <p>Ange ditt namn och din arbets-email. Vi skickar en inloggningslänk dit — klicka på länken så är du inne.</p>
     <form id="gateForm" autocomplete="off">
       <input type="text" id="gateName" placeholder="För- och efternamn" required autofocus />
       <input type="email" id="gateEmail" placeholder="din@arbetsmail.se" required />
       <div class="err-msg" id="gateError"></div>
-      <button type="submit">Fortsätt</button>
+      <button type="submit" id="gateSubmit">Skicka inloggningslänk</button>
     </form>
-    <div class="privacy">Adressen lagras i din webbläsare och i Vercel-loggen för den här tjänsten. Vi delar inte den med tredje part.</div>
+    <div class="privacy">Vi använder din email enbart för inloggning och uppföljning. Vi delar inte den med tredje part.</div>
+  </div>
+  <div class="gate-card" id="gateCardSent" style="display:none">
+    <div class="logo-large"><img src="/plate.svg" alt="Biluppgifter"></div>
+    <h2>Kolla din inkorg 📬</h2>
+    <p>Vi har skickat en inloggningslänk till <strong id="sentToEmail">din email</strong>. Klicka på länken i mailet så loggas du in automatiskt.</p>
+    <p style="font-size:13px;color:var(--muted);margin-top:16px">Länken är giltig i 15 minuter. Om mailet inte syns, kolla skräpposten.</p>
+    <button type="button" id="gateResendBtn" style="background:transparent;color:var(--accent);border:1px solid var(--accent);margin-top:8px">Skicka ny länk</button>
   </div>
 </div>
 
@@ -677,10 +684,15 @@ const logoutBtn = $('logoutBtn');
 const resetBtn = $('resetBtn');
 const mainEl = $('main');
 const gateOverlay = $('gateOverlay');
+const gateCardForm = $('gateCardForm');
+const gateCardSent = $('gateCardSent');
 const gateForm = $('gateForm');
 const gateName = $('gateName');
 const gateEmail = $('gateEmail');
 const gateError = $('gateError');
+const gateSubmit = $('gateSubmit');
+const gateResendBtn = $('gateResendBtn');
+const sentToEmail = $('sentToEmail');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -688,7 +700,15 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function showGate() {
   gateOverlay.style.display = 'flex';
+  gateCardForm.style.display = '';
+  gateCardSent.style.display = 'none';
   setTimeout(() => gateName.focus(), 50);
+}
+function showSentScreen(email) {
+  gateOverlay.style.display = 'flex';
+  gateCardForm.style.display = 'none';
+  gateCardSent.style.display = '';
+  sentToEmail.textContent = email;
 }
 function hideGate() { gateOverlay.style.display = 'none'; }
 function updateEmailPill() {
@@ -699,18 +719,18 @@ function updateEmailPill() {
 }
 
 // Apps Script Web App som tar emot lead-data och skriver rad i Google Sheet.
-const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbzrJp075sEjUDCMFt6k7T2iZtxrhMavY1VI9y1NL2bPb2KfMIP2tYLEGWsOhliaCLbkLA/exec';
+const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxRqwE3OyLEZ59qjyvg6YL-tOOM4JambTPgY4bOhB-xsA88e4DRRTYbWukJf89logIt4w/exec';
 
-async function trackUser(name, email) {
-  // Skicka direkt från frontend till Apps Script — fire-and-forget.
-  // Vi använder mode: 'no-cors' eftersom Apps Script inte sätter CORS-headers.
-  // Det innebär att vi inte kan läsa svaret, men datan skickas och Apps Script skriver raden.
+async function requestMagicLink(name, email) {
+  // POST till Apps Script. mode: 'no-cors' så vi kan inte läsa svaret —
+  // men det är OK, användaren vet att det funkade när hen ser mailet komma.
   try {
     await fetch(SHEET_WEBHOOK_URL, {
       method: 'POST',
       mode: 'no-cors',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
+        action: 'request_magic_link',
         name,
         email,
         user_agent: navigator.userAgent || '',
@@ -720,12 +740,11 @@ async function trackUser(name, email) {
       }),
     });
   } catch (e) {
-    console.warn('track-user failed (non-blocking):', e);
+    console.warn('magic link request failed:', e);
   }
 }
 
-gateForm.addEventListener('submit', (e) => {
-  e.preventDefault();
+function submitGateForm() {
   const nameValue = gateName.value.trim();
   const emailValue = gateEmail.value.trim();
   if (nameValue.length < 2) {
@@ -738,17 +757,32 @@ gateForm.addEventListener('submit', (e) => {
     gateEmail.classList.add('error');
     return;
   }
-  const isNewEmail = emailValue !== state.userEmail;
+  // Spara namn + email lokalt redan nu (även om inloggning är pending)
   state.userName = nameValue;
   state.userEmail = emailValue;
   localStorage.setItem('bil_user_name', nameValue);
   localStorage.setItem('bil_user_email', emailValue);
-  updateEmailPill();
-  hideGate();
-  inputEl.focus();
-  // Logga till Sheet bara om det är en ny adress (eller första gången) — kör async, blockerar inte
-  if (isNewEmail) trackUser(nameValue, emailValue);
+  // Visa "kolla din inkorg"-skärm direkt; mailutskicket kör i bakgrunden
+  gateSubmit.disabled = true;
+  gateSubmit.textContent = 'Skickar…';
+  requestMagicLink(nameValue, emailValue);
+  setTimeout(() => {
+    showSentScreen(emailValue);
+    gateSubmit.disabled = false;
+    gateSubmit.textContent = 'Skicka inloggningslänk';
+  }, 400);
+}
+
+gateForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitGateForm();
 });
+
+gateResendBtn.addEventListener('click', () => {
+  // Tillbaka till formuläret för en ny adress
+  showGate();
+});
+
 gateName.addEventListener('input', () => {
   gateError.textContent = '';
   gateName.classList.remove('error');
@@ -758,11 +792,53 @@ gateEmail.addEventListener('input', () => {
   gateEmail.classList.remove('error');
 });
 
-// Visa gate om ingen email finns ännu
-if (!state.userEmail) {
-  showGate();
-} else {
+// Parsa magic link callback från URL-hash (#auth=base64)
+function parseAuthHash() {
+  if (!location.hash || !location.hash.startsWith('#auth=')) return null;
+  try {
+    const encoded = decodeURIComponent(location.hash.substring(6));
+    const json = JSON.parse(atob(encoded));
+    if (!json.email || !json.name) return null;
+    return { email: json.email, name: json.name, ts: json.ts || Date.now() };
+  } catch (e) {
+    console.warn('Failed to parse auth hash', e);
+    return null;
+  }
+}
+
+function clearAuthHash() {
+  // Ta bort #auth=... från URL utan att ladda om sidan
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 dagar
+
+function hasValidSession() {
+  if (!state.userEmail) return false;
+  const sessionTs = parseInt(localStorage.getItem('bil_session_ts') || '0', 10);
+  if (!sessionTs) return false;
+  return (Date.now() - sessionTs) < SESSION_TTL_MS;
+}
+
+// Boot-flöde:
+// 1) Om URL har #auth=... — verifiera, spara session, dölja gate
+// 2) Annars om vi har en giltig session — visa appen
+// 3) Annars — visa sign-in gate
+const authPayload = parseAuthHash();
+if (authPayload) {
+  state.userEmail = authPayload.email;
+  state.userName = authPayload.name;
+  localStorage.setItem('bil_user_email', authPayload.email);
+  localStorage.setItem('bil_user_name', authPayload.name);
+  localStorage.setItem('bil_session_ts', String(authPayload.ts || Date.now()));
+  clearAuthHash();
   updateEmailPill();
+  hideGate();
+} else if (hasValidSession()) {
+  updateEmailPill();
+  hideGate();
+} else {
+  showGate();
 }
 
 /* ========= INITIERING ========= */
@@ -828,6 +904,7 @@ logoutBtn.addEventListener('click', () => {
   state.messages = [];
   localStorage.removeItem('bil_user_email');
   localStorage.removeItem('bil_user_name');
+  localStorage.removeItem('bil_session_ts');
   chatEl.innerHTML = '';
   welcomeEl.style.display = '';
   updateEmailPill();
