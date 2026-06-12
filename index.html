@@ -614,6 +614,8 @@
     <form id="gateForm" autocomplete="off">
       <input type="text" id="gateName" placeholder="För- och efternamn" required autofocus />
       <input type="email" id="gateEmail" placeholder="din@arbetsmail.se" required />
+      <input type="text" id="gateCompany" placeholder="Företag" required />
+      <input type="text" id="gateOrgNr" placeholder="Organisationsnummer (NNNNNN-NNNN)" required />
       <div class="err-msg" id="gateError"></div>
       <button type="submit" id="gateSubmit">Skicka inloggningslänk</button>
     </form>
@@ -661,6 +663,8 @@
 const state = {
   userEmail: localStorage.getItem('bil_user_email') || '',
   userName: localStorage.getItem('bil_user_name') || '',
+  userCompany: localStorage.getItem('bil_user_company') || '',
+  userOrgNr: localStorage.getItem('bil_user_org_nr') || '',
   messages: [],
 };
 
@@ -689,6 +693,8 @@ const gateCardSent = $('gateCardSent');
 const gateForm = $('gateForm');
 const gateName = $('gateName');
 const gateEmail = $('gateEmail');
+const gateCompany = $('gateCompany');
+const gateOrgNr = $('gateOrgNr');
 const gateError = $('gateError');
 const gateSubmit = $('gateSubmit');
 const gateResendBtn = $('gateResendBtn');
@@ -721,9 +727,7 @@ function updateEmailPill() {
 // Apps Script Web App som tar emot lead-data och skriver rad i Google Sheet.
 const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwBvJtuuFHRIGNDT3CcjeqIrgaDmYEfOPMifPWlzVRQToFFIAno6SQtpR5Fdo-ZzBzv/exec';
 
-async function requestMagicLink(name, email) {
-  // POST till Apps Script. mode: 'no-cors' så vi kan inte läsa svaret —
-  // men det är OK, användaren vet att det funkade när hen ser mailet komma.
+async function requestMagicLink(name, email, company, orgNr) {
   try {
     await fetch(SHEET_WEBHOOK_URL, {
       method: 'POST',
@@ -733,6 +737,8 @@ async function requestMagicLink(name, email) {
         action: 'request_magic_link',
         name,
         email,
+        company,
+        org_nr: orgNr,
         user_agent: navigator.userAgent || '',
         referrer: document.referrer || '',
         timestamp_iso: new Date().toISOString(),
@@ -747,6 +753,8 @@ async function requestMagicLink(name, email) {
 function submitGateForm() {
   const nameValue = gateName.value.trim();
   const emailValue = gateEmail.value.trim();
+  const companyValue = gateCompany.value.trim();
+  const orgNrValue = gateOrgNr.value.trim();
   if (nameValue.length < 2) {
     gateError.textContent = 'Ange ditt namn (minst 2 tecken).';
     gateName.classList.add('error');
@@ -757,15 +765,27 @@ function submitGateForm() {
     gateEmail.classList.add('error');
     return;
   }
-  // Spara namn + email lokalt redan nu (även om inloggning är pending)
+  if (companyValue.length < 2) {
+    gateError.textContent = 'Ange företagsnamn.';
+    gateCompany.classList.add('error');
+    return;
+  }
+  if (orgNrValue.length < 6) {
+    gateError.textContent = 'Ange ett giltigt organisationsnummer (t.ex. 556677-1122).';
+    gateOrgNr.classList.add('error');
+    return;
+  }
   state.userName = nameValue;
   state.userEmail = emailValue;
+  state.userCompany = companyValue;
+  state.userOrgNr = orgNrValue;
   localStorage.setItem('bil_user_name', nameValue);
   localStorage.setItem('bil_user_email', emailValue);
-  // Visa "kolla din inkorg"-skärm direkt; mailutskicket kör i bakgrunden
+  localStorage.setItem('bil_user_company', companyValue);
+  localStorage.setItem('bil_user_org_nr', orgNrValue);
   gateSubmit.disabled = true;
   gateSubmit.textContent = 'Skickar…';
-  requestMagicLink(nameValue, emailValue);
+  requestMagicLink(nameValue, emailValue, companyValue, orgNrValue);
   setTimeout(() => {
     showSentScreen(emailValue);
     gateSubmit.disabled = false;
@@ -790,6 +810,14 @@ gateName.addEventListener('input', () => {
 gateEmail.addEventListener('input', () => {
   gateError.textContent = '';
   gateEmail.classList.remove('error');
+});
+gateCompany.addEventListener('input', () => {
+  gateError.textContent = '';
+  gateCompany.classList.remove('error');
+});
+gateOrgNr.addEventListener('input', () => {
+  gateError.textContent = '';
+  gateOrgNr.classList.remove('error');
 });
 
 // Parsa magic link callback från URL-hash (#auth=base64) — legacy från äldre version
@@ -995,9 +1023,13 @@ logoutBtn.addEventListener('click', () => {
   if (!confirm('Logga ut och rensa lokala data?')) return;
   state.userEmail = '';
   state.userName = '';
+  state.userCompany = '';
+  state.userOrgNr = '';
   state.messages = [];
   localStorage.removeItem('bil_user_email');
   localStorage.removeItem('bil_user_name');
+  localStorage.removeItem('bil_user_company');
+  localStorage.removeItem('bil_user_org_nr');
   localStorage.removeItem('bil_session_ts');
   chatEl.innerHTML = '';
   welcomeEl.style.display = '';
