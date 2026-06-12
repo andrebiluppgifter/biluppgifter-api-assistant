@@ -792,7 +792,7 @@ gateEmail.addEventListener('input', () => {
   gateEmail.classList.remove('error');
 });
 
-// Parsa magic link callback från URL-hash (#auth=base64)
+// Parsa magic link callback från URL-hash (#auth=base64) — legacy från äldre version
 function parseAuthHash() {
   if (!location.hash || !location.hash.startsWith('#auth=')) return null;
   try {
@@ -807,8 +807,76 @@ function parseAuthHash() {
 }
 
 function clearAuthHash() {
-  // Ta bort #auth=... från URL utan att ladda om sidan
   history.replaceState(null, '', location.pathname + location.search);
+}
+
+// Parsa ?token=xxx från URL — den nya magic link-vägen via Vercel
+function parseTokenQuery() {
+  const params = new URLSearchParams(location.search);
+  return params.get('token');
+}
+
+function clearTokenQuery() {
+  history.replaceState(null, '', location.pathname);
+}
+
+async function verifyTokenViaApi(token) {
+  try {
+    const res = await fetch('/api/verify-magic-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json();
+    return data;
+  } catch (err) {
+    console.error('verify-magic-link request failed:', err);
+    return { ok: false, error: 'Network error' };
+  }
+}
+
+function showVerifyingScreen() {
+  gateOverlay.style.display = 'flex';
+  gateCardForm.style.display = 'none';
+  gateCardSent.style.display = 'none';
+  // Skapa en tillfällig "loggar in"-vy om den inte finns redan
+  let verifyCard = document.getElementById('gateCardVerifying');
+  if (!verifyCard) {
+    verifyCard = document.createElement('div');
+    verifyCard.id = 'gateCardVerifying';
+    verifyCard.className = 'gate-card';
+    verifyCard.innerHTML =
+      '<div class="logo-large"><img src="/plate.svg" alt="Biluppgifter"></div>' +
+      '<h2>Loggar in dig…</h2>' +
+      '<p>Verifierar din inloggningslänk.</p>';
+    gateOverlay.appendChild(verifyCard);
+  }
+  verifyCard.style.display = '';
+}
+
+function showVerifyError(errorMsg) {
+  gateOverlay.style.display = 'flex';
+  gateCardForm.style.display = 'none';
+  gateCardSent.style.display = 'none';
+  const verifyCard = document.getElementById('gateCardVerifying');
+  if (verifyCard) verifyCard.style.display = 'none';
+  let errCard = document.getElementById('gateCardError');
+  if (!errCard) {
+    errCard = document.createElement('div');
+    errCard.id = 'gateCardError';
+    errCard.className = 'gate-card';
+    gateOverlay.appendChild(errCard);
+  }
+  errCard.innerHTML =
+    '<div class="logo-large"><img src="/plate.svg" alt="Biluppgifter"></div>' +
+    '<h2 style="color:var(--danger)">⚠️ Inloggning misslyckades</h2>' +
+    '<p>' + errorMsg + '</p>' +
+    '<button type="button" id="errBackBtn" style="background:var(--accent);color:white;border:none;padding:12px 20px;border-radius:10px;font-weight:600;cursor:pointer;font-family:inherit;font-size:14px">Begär ny länk</button>';
+  errCard.style.display = '';
+  document.getElementById('errBackBtn').addEventListener('click', () => {
+    if (errCard) errCard.style.display = 'none';
+    showGate();
+  });
 }
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 dagar
@@ -821,25 +889,51 @@ function hasValidSession() {
 }
 
 // Boot-flöde:
-// 1) Om URL har #auth=... — verifiera, spara session, dölja gate
-// 2) Annars om vi har en giltig session — visa appen
-// 3) Annars — visa sign-in gate
-const authPayload = parseAuthHash();
-if (authPayload) {
-  state.userEmail = authPayload.email;
-  state.userName = authPayload.name;
-  localStorage.setItem('bil_user_email', authPayload.email);
-  localStorage.setItem('bil_user_name', authPayload.name);
-  localStorage.setItem('bil_session_ts', String(authPayload.ts || Date.now()));
-  clearAuthHash();
-  updateEmailPill();
-  hideGate();
-} else if (hasValidSession()) {
-  updateEmailPill();
-  hideGate();
-} else {
-  showGate();
+// 1) Om URL har ?token=... — verifiera via Vercel-funktion, spara session
+// 2) Annars om URL har #auth=... (legacy) — verifiera direkt, spara session
+// 3) Annars om vi har en giltig session — visa appen
+// 4) Annars — visa sign-in gate
+async function boot() {
+  const token = parseTokenQuery();
+  if (token) {
+    showVerifyingScreen();
+    const result = await verifyTokenViaApi(token);
+    clearTokenQuery();
+    if (result.ok && result.email && result.name) {
+      state.userEmail = result.email;
+      state.userName = result.name;
+      localStorage.setItem('bil_user_email', result.email);
+      localStorage.setItem('bil_user_name', result.name);
+      localStorage.setItem('bil_session_ts', String(Date.now()));
+      updateEmailPill();
+      hideGate();
+    } else {
+      const msg = result.error === 'token expired' ? 'Länken har gått ut. Begär en ny.' :
+                  result.error === 'token already used' ? 'Länken har redan använts. Begär en ny om du behöver logga in igen.' :
+                  result.error === 'token not found' ? 'Länken är ogiltig. Begär en ny.' :
+                  'Något gick fel: ' + (result.error || 'okänt fel') + '. Begär en ny länk.';
+      showVerifyError(msg);
+    }
+    return;
+  }
+  const authPayload = parseAuthHash();
+  if (authPayload) {
+    state.userEmail = authPayload.email;
+    state.userName = authPayload.name;
+    localStorage.setItem('bil_user_email', authPayload.email);
+    localStorage.setItem('bil_user_name', authPayload.name);
+    localStorage.setItem('bil_session_ts', String(authPayload.ts || Date.now()));
+    clearAuthHash();
+    updateEmailPill();
+    hideGate();
+  } else if (hasValidSession()) {
+    updateEmailPill();
+    hideGate();
+  } else {
+    showGate();
+  }
 }
+boot();
 
 /* ========= INITIERING ========= */
 
