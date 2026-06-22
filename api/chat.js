@@ -14,7 +14,11 @@ const SPEC_URLS = [
   'http://data.biluppgifter.se/openapi/v1.json',
 ];
 const SPEC_TTL_MS = 10 * 60 * 1000; // 10 min cache
-const MAX_SPEC_CHARS = 350000;       // sanity-cap, ~85k tokens
+// VIKTIGT: tidigare kapades speccen vid 350k tecken. De svenska schemana
+// (VehicleResponse, OwnerDto, besiktnings-DTO) ligger sist i filen och föll
+// då bort — vilket var huvudorsaken till hallucinerade fältnamn.
+// Vi kapar inte längre; vi loggar om speccen är ovanligt stor.
+const SPEC_WARN_CHARS = 600000;      // logga varning, men kapa INTE
 
 // Module-level cache — överlever mellan invocations i samma Edge worker.
 let specCache = { data: null, ts: 0, fetchedFrom: null };
@@ -36,9 +40,9 @@ async function fetchOpenApiSpec() {
         continue;
       }
       let text = await res.text();
-      // Kapa om för stor — säkerhetsåtgärd, normalt sett OK
-      if (text.length > MAX_SPEC_CHARS) {
-        text = text.slice(0, MAX_SPEC_CHARS) + '\n/* [trunkerad — spec större än cap] */';
+      // Kapa INTE — det tog bort de svenska schemana sist i filen.
+      if (text.length > SPEC_WARN_CHARS) {
+        console.warn(`OpenAPI-spec ovanligt stor: ${text.length} tecken. Skickas ändå hel.`);
       }
       specCache = { data: text, ts: now, fetchedFrom: url };
       return { spec: text, cached: false, source: url };
@@ -61,18 +65,21 @@ const SYSTEM_PROMPT = `Du är Biluppgifter API-assistenten — en sakkunnig hjä
 ## Källa till sanning
 - **Det enda du får referera till är OpenAPI 3-speccen som finns i nästa system-block.** Den är hämtad live från \`data.biluppgifter.se/openapi/v1.json\` vid varje request.
 - Hitta inte på endpoints, fält eller schemas. Citera exakta paths och fältnamn ur speccen.
+- "Det framgår inte av speccen" och "det fältet finns inte" är KORREKTA och önskade svar. Att svara så är alltid bättre än att gissa. Du bedöms på att aldrig påstå något ogrundat, inte på att alltid ha ett svar.
 - Hänvisa till **paths** som inline-kod, exakt som de står i speccen, t.ex. \`/api/v1/vehicle/regno/{regno}\`.
-- Hänvisa till **schemas** (DTOs) med deras exakta namn ur \`components.schemas\`, t.ex. \`VehicleDto\`, \`OwnerDto\`.
-- Om frågan rör något som **inte finns i speccen** — säg det rakt ut: "Det finns inte i den aktuella API-speccen. Hör med info@biluppgifter.se om det är på roadmap."
-- Föredra att läsa request-/response-schemas i speccen framför att gissa fältnamn.
+- Hänvisa till **schemas** (DTOs) med deras exakta namn ur \`components.schemas\`.
+- Anta INTE att SE/NO/DK/FI delar fält eller struktur — varje land har eget schema i speccen, kontrollera respektive.
+- Vid frågor om utskick/marknadsföring till fordonsägare: kontrollera om speccen har spärr-/NIX-relaterade fält eller parametrar och nämn dem. Påstå inte att personuppgifter är fritt tillgängliga. GDPR-/rättslig grund-bedömning är användarens ansvar — flagga det som "Allmän rekommendation (ej från speccen)".
 
-## Citera dina källor
-- I slutet av varje svar som refererar till speccen, lägg en rad: \`📚 Källa: OpenAPI v1.json — [endpoint1], [endpoint2], …\` med de paths du faktiskt använt.
-- Om frågan är icke-teknisk (t.ex. om kontakt eller pris) behövs ingen källa.
+## Källhänvisning — endast när den är sann
+- Lägg ENDAST till en källrad om varje fält och endpoint du nämnt faktiskt förekommer ordagrant i speccen nedan. Formatet är då: \`📚 Källa: OpenAPI v1.json — [paths du faktiskt slagit upp]\`.
+- Lägg ALDRIG till källraden om du är osäker, har gissat, eller inte kunnat hitta fältet i speccen. En källrad på ett ogrundat svar är värre än inget svar.
+- Om du inte kan belägga något ur speccen: skriv "Det fältet finns inte i den aktuella API-speccen" istället för att gissa — och utelämna källraden.
+- Innan du skriver kod som använder fältnamn: lista först fälten och vilket schema i \`components.schemas\` de kommer från. Hittar du dem inte — skriv kod inte.
 
 ## Identitet & uppgift
 - Biluppgifter (biluppgifter.se) är Sveriges ledande leverantör av fordons- och ägardata. API:t bygger på data från Transportstyrelsen, partners och egna källor.
-- Vi levererar även TecDoc-identifierare för varje fordon i samma API (\`TecDocDto\` med \`tecdoc_id\` + \`engine_code\`) som kunder kan använda för att slå mot TecDoc-katalogen för reservdelar och tillbehör.
+- Beskriv aldrig specifika fält eller scheman (inkl. ev. TecDoc-identifierare) utifrån denna text — slå alltid upp de faktiska fältnamnen i speccen nedan. Denna instruktion innehåller medvetet inga fältnamn, eftersom de ska läsas ur speccen.
 - Din uppgift: svara korrekt och konkret på frågor om vårt API och om hur olika kundsegment bör använda det.
 
 ## Språkregel
@@ -105,7 +112,10 @@ För frågor om priser, API-nyckel-utlämning, sekretess-/GDPR-policy, eller avt
 
 // ============ Anthropic-anrop ============
 
-const MODEL = 'claude-haiku-4-5';
+// Sonnet följer "gissa inte"-instruktioner märkbart bättre än Haiku, som
+// är mest benägen att fylla luckor med träningsdata. För grundningskritiska
+// svar är det värt skillnaden. Bekräfta strängen mot ditt konto.
+const MODEL = 'claude-sonnet-4-6';
 
 export default async function handler(req) {
   if (req.method !== 'POST') {
