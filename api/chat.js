@@ -33,32 +33,61 @@ const WHEELS_PARTS_SPEC_URL = 'https://api.xevato.se/swagger.php';
 let wheelsPartsCache = { data: null, ts: 0 };
 
 // Sanering: parsa JSON, byt ut title/description, ta bort servers, regex-rensa text-fält.
+// Aggressiv filtrering: Wheels-modulen ska BARA hantera frågor om däckdimensioner
+// och fälgar som passar fordonet. Allt annat (parts, brakes, vehicleData,
+// model-selector, authenticate-endpoints) strippas innan modellen ser speccen.
+// Verkstad/reservdelar/bromsar hanteras alltid via TecDoc-ID + motorkod från huvud-API:t.
 function sanitizeWheelsPartsSpec(rawText) {
   let parsed;
   try {
     parsed = JSON.parse(rawText);
   } catch {
-    // Om JSON-parse failar — gör textbaserad rensning som bästa effort
     return scrubProviderRefs(rawText);
   }
 
-  // Skriv om identitet
+  // Identitet — neutral, ingen leverantörsreferens
   parsed.info = parsed.info || {};
-  parsed.info.title = 'Biluppgifter Wheels & Parts API';
+  parsed.info.title = 'Biluppgifter Wheels API';
   parsed.info.description =
-    'Tilläggsmodul till Biluppgifters API. Endpoints för fordons-, fälg-, däck- och reservdelsdata ' +
-    'baserade på registreringsnummer eller fordons-ID. Kräver separat aktivering — kontakta sales@biluppgifter.se.';
+    'Tilläggsmodul till Biluppgifters API. Endpoints för fälg- och däckdimensioner per fordon — vilka hjul som passar bilen baserat på registreringsnummer eller fordons-ID. Kräver separat aktivering.';
   delete parsed.info.contact;
   delete parsed.info.termsOfService;
   delete parsed.info.license;
-
-  // Ta bort servers helt — kunden ska inte se leverantörens domän
   delete parsed.servers;
 
-  // Stringify, sedan regex-pass över text-fält för att rensa kvarvarande referenser
+  // Filtrera paths — behåll BARA /wheels/... (strippa /parts, /model, /authenticate, etc.)
+  if (parsed.paths && typeof parsed.paths === 'object') {
+    const filtered = {};
+    for (const path of Object.keys(parsed.paths)) {
+      if (path.indexOf('/wheels/') === 0 || path === '/wheels') {
+        filtered[path] = parsed.paths[path];
+      }
+    }
+    parsed.paths = filtered;
+  }
+
+  // Rekursivt strippa fält som inte är wheels-relaterade ur response-schemat.
+  // brakes/vehicleData/parts ska INTE rekommenderas via Wheels-endpointen — de
+  // hör hemma i huvud-API:t (TecDoc-ID + motorkod) eller andra Biluppgifter-endpoints.
+  const STRIP_KEYS = new Set(['brakes', 'vehicleData', 'parts', 'tpms']);
+  function stripUnwantedFields(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) {
+      obj.forEach(stripUnwantedFields);
+      return;
+    }
+    for (const k of Object.keys(obj)) {
+      if (STRIP_KEYS.has(k)) {
+        delete obj[k];
+      } else {
+        stripUnwantedFields(obj[k]);
+      }
+    }
+  }
+  stripUnwantedFields(parsed.paths);
+
   let json = JSON.stringify(parsed, null, 2);
-  json = scrubProviderRefs(json);
-  return json;
+  return scrubProviderRefs(json);
 }
 
 function scrubProviderRefs(text) {
@@ -140,14 +169,30 @@ const SYSTEM_PROMPT = `Du är Biluppgifter API-assistenten — en sakkunnig hjä
 
 ## Källor till sanning (två specer)
 - Du har TVÅ OpenAPI 3-specer som auktoritativ källa i system-blocken nedan, hämtade live vid varje request:
-  1. **Biluppgifter API (huvud)** — fordons-, ägar- och historikdata. Bas: \`data.biluppgifter.se\`.
-  2. **Biluppgifter Wheels & Parts API (tillägg)** — fälg-, däck-, fordons- och reservdelsdata. Bas: samma, kräver separat aktivering.
+  1. **Biluppgifter API (huvud)** — fordons-, ägar-, historik-, skuld-, värderings- och annonsdata. Innehåller även \`TecDocDto\` med \`tecdoc_id\` och \`engine_code\` (motorkod) per fordon. Bas: \`data.biluppgifter.se\`.
+  2. **Biluppgifter Wheels API (tillägg)** — ENDAST fälg- och däckdimensioner per fordon (vilka hjul som passar bilen). Strikt begränsad scope.
 - **Båda är Biluppgifters egna API-produkter.** Behandla dem som ett enhetligt erbjudande. Du får under inga omständigheter nämna, antyda eller spekulera om att någon del kommer från en extern leverantör eller tredje part. Om användaren frågar var datan kommer ifrån: "Det är Biluppgifters egen data och partner-data — kontakta sales@biluppgifter.se för detaljer om datakällor i avtal."
-- **Vid frågor om däck, fälg, fälgmått, däckdimensioner, rim/tire/wheel, parts/reservdelar, kompatibilitet, "vad passar bilen"** → använd **Wheels & Parts**-speccen.
-- **Vid frågor om fordonsdata, ägare, historik, status, skulder, värdering, annonser** → använd **huvudspeccen**.
-- Vissa frågor kräver båda — då nämner du paths från båda specerna utan att skilja på dem som separata produkter (de är båda "Biluppgifters API").
-- För Wheels & Parts-endpoints: ange **aldrig** en absolut base-URL i kod-exempel. Skriv \`/wheels/regno/{regno}/{country}/\` som relativ path.
-- **Sales-hänvisningen får upprepas max EN gång per konversation.** Innan du skriver "kontakta sales@biluppgifter.se för aktivering av Wheels & Parts-modulen" (eller motsvarande formulering): granska tidigare assistant-meddelanden i samtalshistoriken. Om någon tidigare turn redan innehåller "sales@biluppgifter.se" eller en hänvisning om aktivering/åtkomst av Wheels & Parts → utelämna den meningen helt i detta svar. Användaren har redan fått infon. Skriv bara svaret om endpoints/fält.
+
+## Wheels API — strikt scope
+**Wheels API används BARA för:**
+- Däckdimensioner som passar fordonet (bredd, profil, diameter, load index, hastighetsindex)
+- Fälgar som passar fordonet (diameter, bredd, ET, bultmönster, centrumhål)
+- OE-konfigurationer och staggered setups (olika dim fram/bak)
+
+**Wheels API används ALDRIG för (även om någon frågar det):**
+- Bromsar/bromsskivor/bromsbelägg → rekommendera \`TecDocDto.tecdoc_id\` + \`engine_code\` (motorkod) från huvud-API:t. Verkstaden slår mot TecDoc-katalogen med dessa.
+- Reservdelar (filter, oljor, motordelar, tändstift, batterier, etc.) → rekommendera \`TecDocDto.tecdoc_id\` + \`engine_code\` från huvud-API:t.
+- Fordonsdata (märke, modell, motor, drivlina, etc.) → använd huvud-API:t \`/api/v1/vehicle/regno/{regno}\`.
+- Modellväljare/manufacturers-listor → använd huvud-API:t.
+
+**Routning-regel:**
+- Vid frågor om däck/fälg-fitment → Wheels API:s \`/wheels/regno/{regno}/{country}/\` eller \`/wheels/{vehicle_id}/\`.
+- Vid frågor om bromsar, reservdelar, "vad för X passar bilen" där X inte är hjul/däck → ALDRIG Wheels API. Rekommendera istället \`TecDocDto\` (\`tecdoc_id\` + \`engine_code\`) från huvud-API:t.
+- Vid frågor om fordon, ägare, historik, status, skulder, värdering, annonser → huvud-API:t.
+
+För Wheels API-endpoints: ange **aldrig** en absolut base-URL i kod-exempel. Skriv \`/wheels/regno/{regno}/{country}/\` som relativ path.
+
+**Sales-hänvisningen får upprepas max EN gång per konversation.** Innan du skriver "kontakta sales@biluppgifter.se för aktivering av Wheels-modulen" (eller motsvarande formulering): granska tidigare assistant-meddelanden i samtalshistoriken. Om någon tidigare turn redan innehåller "sales@biluppgifter.se" eller en hänvisning om aktivering/åtkomst av Wheels → utelämna den meningen helt i detta svar.
 
 ## Strikt grundningsregel
 - Hitta inte på endpoints, fält eller schemas. Citera exakta paths och fältnamn ur respektive spec.
@@ -196,6 +241,80 @@ För frågor om priser, API-nyckel-utlämning, sekretess-/GDPR-policy, eller avt
 - Kontakt: sales@biluppgifter.se
 `;
 
+// ============ Session-token verifiering (HMAC-SHA256) ============
+// Klienten skickar en session_token som mintats av Apps Script efter lyckad
+// magic link-verifiering. Vi verifierar HMAC-signaturen lokalt mot samma
+// SESSION_SECRET som Apps Script använder — ingen round-trip behövs.
+
+function base64UrlEncodeBuffer(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecodeUtf8(b64u) {
+  let b64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+async function verifySessionToken(token) {
+  if (!token || typeof token !== 'string') return { ok: false, error: 'no token' };
+  const parts = token.split('.');
+  if (parts.length !== 2) return { ok: false, error: 'malformed token' };
+  const [payloadB64, sigB64] = parts;
+
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) {
+    console.error('SESSION_SECRET env var missing');
+    return { ok: false, error: 'server config error' };
+  }
+
+  const encoder = new TextEncoder();
+  let key;
+  try {
+    key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+  } catch (err) {
+    console.error('crypto.subtle.importKey failed:', err);
+    return { ok: false, error: 'crypto error' };
+  }
+
+  const sigBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(payloadB64));
+  const expectedSigB64 = base64UrlEncodeBuffer(sigBuffer);
+
+  // Constant-time compare
+  if (expectedSigB64.length !== sigB64.length) return { ok: false, error: 'bad signature' };
+  let diff = 0;
+  for (let i = 0; i < expectedSigB64.length; i++) {
+    diff |= expectedSigB64.charCodeAt(i) ^ sigB64.charCodeAt(i);
+  }
+  if (diff !== 0) return { ok: false, error: 'bad signature' };
+
+  // Decode payload och kolla giltighet
+  let payload;
+  try {
+    const payloadJson = base64UrlDecodeUtf8(payloadB64);
+    payload = JSON.parse(payloadJson);
+  } catch {
+    return { ok: false, error: 'corrupt payload' };
+  }
+
+  if (!payload.email || !payload.exp) return { ok: false, error: 'incomplete payload' };
+  if (Date.now() > payload.exp) return { ok: false, error: 'session expired' };
+
+  return { ok: true, email: payload.email, name: payload.name || '' };
+}
+
 // ============ Anthropic-anrop ============
 
 // Sonnet följer "gissa inte"-instruktioner märkbart bättre än Haiku, som
@@ -231,7 +350,7 @@ export default async function handler(req) {
     });
   }
 
-  const { messages, user_email, user_name } = body || {};
+  const { messages, session_token } = body || {};
   if (!Array.isArray(messages) || messages.length === 0) {
     return new Response(JSON.stringify({ error: 'messages[] required' }), {
       status: 400,
@@ -239,15 +358,23 @@ export default async function handler(req) {
     });
   }
 
-  if (!user_email || typeof user_email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user_email)) {
-    return new Response(JSON.stringify({ error: 'user_email required (valid email)' }), {
+  // Verifiera HMAC-signerad session-token (mintad av Apps Script vid magic
+  // link-verify). Detta ersätter den gamla user_email-kontrollen som var
+  // klient-kontrollerad och därmed enkel att förfalska via DevTools.
+  const session = await verifySessionToken(session_token);
+  if (!session.ok) {
+    console.warn('chat request rejected:', session.error);
+    return new Response(JSON.stringify({
+      error: 'Invalid session: ' + session.error,
+      code: 'invalid_session',
+    }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
-
-  const nameForLog = user_name && typeof user_name === 'string' ? user_name.slice(0, 200) : '(no name)';
-  console.log('chat request from', nameForLog, '<' + user_email.slice(0, 200) + '>');
+  const user_email = session.email;
+  const user_name = session.name;
+  console.log('chat request from', user_name || '(no name)', '<' + String(user_email).slice(0, 200) + '>');
 
   // Hämta båda specerna parallellt så latensen inte ökar
   let specPayload, wheelsPartsPayload;
