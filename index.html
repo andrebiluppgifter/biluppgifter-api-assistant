@@ -965,7 +965,11 @@ function showVerifyError(errorMsg) {
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 dagar
 
 function hasValidSession() {
+  // Kräver nu en HMAC-signerad session-token (mintad av Apps Script).
+  // Servern verifierar signaturen vid varje chat-anrop — bypassed-localStorage
+  // utan giltig token ger 401 från /api/chat.
   if (!state.userEmail) return false;
+  if (!localStorage.getItem('bil_session_token')) return false;
   const sessionTs = parseInt(localStorage.getItem('bil_session_ts') || '0', 10);
   if (!sessionTs) return false;
   return (Date.now() - sessionTs) < SESSION_TTL_MS;
@@ -978,11 +982,12 @@ async function boot() {
     showVerifyingScreen();
     const result = await verifyTokenViaApi(token);
     clearTokenQuery();
-    if (result.ok && result.email && result.name) {
+    if (result.ok && result.email && result.name && result.session_token) {
       state.userEmail = result.email;
       state.userName = result.name;
       localStorage.setItem('bil_user_email', result.email);
       localStorage.setItem('bil_user_name', result.name);
+      localStorage.setItem('bil_session_token', result.session_token);
       localStorage.setItem('bil_session_ts', String(Date.now()));
       updateEmailPill();
       hideGate();
@@ -995,17 +1000,14 @@ async function boot() {
     }
     return;
   }
-  const authPayload = parseAuthHash();
-  if (authPayload) {
-    state.userEmail = authPayload.email;
-    state.userName = authPayload.name;
-    localStorage.setItem('bil_user_email', authPayload.email);
-    localStorage.setItem('bil_user_name', authPayload.name);
-    localStorage.setItem('bil_session_ts', String(authPayload.ts || Date.now()));
+  // (Legacy #auth=base64-hash är borttagen — den var osignerad och tillät
+  //  spoofing via DevTools. Allt går nu via ?token=xxx → verifyTokenViaApi
+  //  som returnerar en HMAC-signerad session-token.)
+  if (location.hash && location.hash.startsWith('#auth=')) {
+    // Säker rensning: ta bort hashen utan att ge access
     clearAuthHash();
-    updateEmailPill();
-    hideGate();
-  } else if (hasValidSession()) {
+  }
+  if (hasValidSession()) {
     updateEmailPill();
     hideGate();
   } else {
@@ -1078,6 +1080,7 @@ logoutBtn.addEventListener('click', () => {
   localStorage.removeItem('bil_user_name');
   localStorage.removeItem('bil_user_company');
   localStorage.removeItem('bil_user_org_nr');
+  localStorage.removeItem('bil_session_token');
   localStorage.removeItem('bil_session_ts');
   chatEl.innerHTML = '';
   welcomeEl.style.display = '';
@@ -1192,13 +1195,26 @@ async function sendMessage(text) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        user_email: state.userEmail,
-        user_name: state.userName,
+        session_token: localStorage.getItem('bil_session_token') || '',
         messages: state.messages,
       }),
     });
     if (!response.ok) {
       const errorText = await response.text();
+      // Om servern säger att sessionen är ogiltig — rensa lokalt och be om ny login
+      if (response.status === 401) {
+        try {
+          const parsed = JSON.parse(errorText);
+          if (parsed.code === 'invalid_session') {
+            localStorage.removeItem('bil_session_token');
+            localStorage.removeItem('bil_session_ts');
+            if (loading.parentNode) loading.remove();
+            addMessage('bot', '⚠️ **Din session har gått ut eller ogiltigförklarats.** Begär en ny inloggningslänk.');
+            showGate();
+            return;
+          }
+        } catch {}
+      }
       throw new Error('API-fel ' + response.status + ': ' + errorText);
     }
     loading.remove();
