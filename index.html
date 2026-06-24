@@ -775,6 +775,26 @@ function updateEmailPill() {
 // Apps Script Web App som tar emot lead-data och skriver rad i Google Sheet.
 const SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwBvJtuuFHRIGNDT3CcjeqIrgaDmYEfOPMifPWlzVRQToFFIAno6SQtpR5Fdo-ZzBzv/exec';
 
+// Logga frågor från inloggade användare till Google Sheet (kolumn L på deras rad).
+// Fire-and-forget — blockerar inte chattsvaret.
+function logQuestion(email, question) {
+  if (!email || !question) return;
+  try {
+    fetch(SHEET_WEBHOOK_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'log_question',
+        email,
+        question: String(question).slice(0, 2000),
+      }),
+    }).catch((e) => console.warn('logQuestion failed:', e));
+  } catch (e) {
+    console.warn('logQuestion threw:', e);
+  }
+}
+
 async function requestMagicLink(name, email, company, orgNr) {
   try {
     await fetch(SHEET_WEBHOOK_URL, {
@@ -1162,6 +1182,8 @@ function addLoadingMessage() {
 async function sendMessage(text) {
   addMessage('user', text);
   state.messages.push({ role: 'user', content: text });
+  // Logga frågan till Google Sheet (fire-and-forget — blockerar inte streaming)
+  logQuestion(state.userEmail, text);
   const loading = addLoadingMessage();
   let bubble = null;
   let fullText = '';
