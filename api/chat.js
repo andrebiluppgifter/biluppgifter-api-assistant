@@ -23,6 +23,82 @@ const SPEC_WARN_CHARS = 600000;      // logga varning, men kapa INTE
 // Module-level cache — överlever mellan invocations i samma Edge worker.
 let specCache = { data: null, ts: 0, fetchedFrom: null };
 
+// ============ Wheels & Parts spec (extern leverantör — namnet ska INTE läcka) ============
+// Speccen kommer från en underleverantör. Vi paketerar den som "Biluppgifter Wheels & Parts API"
+// och tvättar bort leverantörens namn/domän/portal-länkar runtime. Source-URL:en loggas bara
+// server-side så att vi vet vad cachen baseras på — den exponeras aldrig till modellen.
+
+const WHEELS_PARTS_SPEC_URL = 'https://api.xevato.se/swagger.php';
+
+let wheelsPartsCache = { data: null, ts: 0 };
+
+// Sanering: parsa JSON, byt ut title/description, ta bort servers, regex-rensa text-fält.
+function sanitizeWheelsPartsSpec(rawText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    // Om JSON-parse failar — gör textbaserad rensning som bästa effort
+    return scrubProviderRefs(rawText);
+  }
+
+  // Skriv om identitet
+  parsed.info = parsed.info || {};
+  parsed.info.title = 'Biluppgifter Wheels & Parts API';
+  parsed.info.description =
+    'Tilläggsmodul till Biluppgifters API. Endpoints för fordons-, fälg-, däck- och reservdelsdata ' +
+    'baserade på registreringsnummer eller fordons-ID. Kräver separat aktivering — kontakta sales@biluppgifter.se.';
+  delete parsed.info.contact;
+  delete parsed.info.termsOfService;
+  delete parsed.info.license;
+
+  // Ta bort servers helt — kunden ska inte se leverantörens domän
+  delete parsed.servers;
+
+  // Stringify, sedan regex-pass över text-fält för att rensa kvarvarande referenser
+  let json = JSON.stringify(parsed, null, 2);
+  json = scrubProviderRefs(json);
+  return json;
+}
+
+function scrubProviderRefs(text) {
+  return text
+    // Domän-referenser → vår egen
+    .replace(/\bapi\.xevato\.se\b/gi, 'data.biluppgifter.se')
+    .replace(/\bpanel\.xevato\.se\b/gi, 'biluppgifter.se')
+    .replace(/\bswagger\.xevato\.se\b/gi, 'data.biluppgifter.se')
+    .replace(/\bapistage\.xevato\.se\b/gi, 'data.biluppgifter.se')
+    .replace(/\b(?:www\.)?xevato\.se\b/gi, 'biluppgifter.se')
+    // Bara ordet — varianter
+    .replace(/\bXevato\b/g, 'Biluppgifter')
+    .replace(/\bXEVATO\b/g, 'BILUPPGIFTER')
+    .replace(/\bxevato\b/g, 'biluppgifter');
+}
+
+async function fetchWheelsPartsSpec() {
+  const now = Date.now();
+  if (wheelsPartsCache.data && (now - wheelsPartsCache.ts) < SPEC_TTL_MS) {
+    return { spec: wheelsPartsCache.data, cached: true };
+  }
+  try {
+    const res = await fetch(WHEELS_PARTS_SPEC_URL, {
+      headers: { 'Accept': 'application/json' },
+      cf: { cacheTtl: 300 },
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const raw = await res.text();
+    const sanitized = sanitizeWheelsPartsSpec(raw);
+    wheelsPartsCache = { data: sanitized, ts: now };
+    return { spec: sanitized, cached: false };
+  } catch (err) {
+    if (wheelsPartsCache.data) {
+      console.warn('Wheels/Parts spec fetch failed, returning stale cache:', err?.message);
+      return { spec: wheelsPartsCache.data, cached: true, stale: true };
+    }
+    throw new Error('Could not fetch wheels/parts spec: ' + (err?.message || 'unknown'));
+  }
+}
+
 async function fetchOpenApiSpec() {
   const now = Date.now();
   if (specCache.data && (now - specCache.ts) < SPEC_TTL_MS) {
@@ -62,9 +138,18 @@ async function fetchOpenApiSpec() {
 
 const SYSTEM_PROMPT = `Du är Biluppgifter API-assistenten — en sakkunnig hjälpreda för utvecklare, säljare och beslutsfattare som vill förstå eller använda Biluppgifters API.
 
-## Källa till sanning
-- **Det enda du får referera till är OpenAPI 3-speccen som finns i nästa system-block.** Den är hämtad live från \`data.biluppgifter.se/openapi/v1.json\` vid varje request.
-- Hitta inte på endpoints, fält eller schemas. Citera exakta paths och fältnamn ur speccen.
+## Källor till sanning (två specer)
+- Du har TVÅ OpenAPI 3-specer som auktoritativ källa i system-blocken nedan, hämtade live vid varje request:
+  1. **Biluppgifter API (huvud)** — fordons-, ägar- och historikdata. Bas: \`data.biluppgifter.se\`.
+  2. **Biluppgifter Wheels & Parts API (tillägg)** — fälg-, däck-, fordons- och reservdelsdata. Bas: samma, kräver separat aktivering.
+- **Båda är Biluppgifters egna API-produkter.** Behandla dem som ett enhetligt erbjudande. Du får under inga omständigheter nämna, antyda eller spekulera om att någon del kommer från en extern leverantör eller tredje part. Om användaren frågar var datan kommer ifrån: "Det är Biluppgifters egen data och partner-data — kontakta sales@biluppgifter.se för detaljer om datakällor i avtal."
+- **Vid frågor om däck, fälg, fälgmått, däckdimensioner, rim/tire/wheel, parts/reservdelar, kompatibilitet, "vad passar bilen"** → använd **Wheels & Parts**-speccen.
+- **Vid frågor om fordonsdata, ägare, historik, status, skulder, värdering, annonser** → använd **huvudspeccen**.
+- Vissa frågor kräver båda — då nämner du paths från båda specerna utan att skilja på dem som separata produkter (de är båda "Biluppgifters API").
+- För Wheels & Parts-endpoints: ange **aldrig** en absolut base-URL i kod-exempel. Skriv \`/wheels/regno/{regno}/{country}/\` som relativ path och nämn: "Tillgängligt via Biluppgifters Wheels & Parts-modul — kontakta sales@biluppgifter.se för åtkomstuppgifter."
+
+## Strikt grundningsregel
+- Hitta inte på endpoints, fält eller schemas. Citera exakta paths och fältnamn ur respektive spec.
 - "Det framgår inte av speccen" och "det fältet finns inte" är KORREKTA och önskade svar. Att svara så är alltid bättre än att gissa. Du bedöms på att aldrig påstå något ogrundat, inte på att alltid ha ett svar.
 - Hänvisa till **paths** som inline-kod, exakt som de står i speccen, t.ex. \`/api/v1/vehicle/regno/{regno}\`.
 - Hänvisa till **schemas** (DTOs) med deras exakta namn ur \`components.schemas\`.
@@ -163,11 +248,23 @@ export default async function handler(req) {
   const nameForLog = user_name && typeof user_name === 'string' ? user_name.slice(0, 200) : '(no name)';
   console.log('chat request from', nameForLog, '<' + user_email.slice(0, 200) + '>');
 
-  // Hämta live OpenAPI-spec
-  let specPayload;
+  // Hämta båda specerna parallellt så latensen inte ökar
+  let specPayload, wheelsPartsPayload;
   try {
-    specPayload = await fetchOpenApiSpec();
-    console.log('spec source:', specPayload.source, '| cached:', specPayload.cached, '| chars:', specPayload.spec.length);
+    const [main, wheels] = await Promise.all([
+      fetchOpenApiSpec(),
+      fetchWheelsPartsSpec().catch((err) => {
+        // Om wheels/parts failar — kör vidare utan den, logga warning
+        console.warn('Wheels/parts spec unavailable, continuing without it:', err?.message);
+        return null;
+      }),
+    ]);
+    specPayload = main;
+    wheelsPartsPayload = wheels;
+    console.log(
+      'main spec:', specPayload.source, '| cached:', specPayload.cached, '| chars:', specPayload.spec.length,
+      '| wheels-parts:', wheelsPartsPayload ? (wheelsPartsPayload.cached ? 'cached' : 'fresh') + ', ' + wheelsPartsPayload.spec.length + ' chars' : 'unavailable'
+    );
   } catch (err) {
     console.error('Could not fetch OpenAPI spec:', err);
     return new Response(JSON.stringify({
@@ -187,23 +284,39 @@ export default async function handler(req) {
     });
   }
 
-  // Bygg system som array av blocks — speccen får cache_control så Anthropic cachar den
+  // Bygg system som array av blocks — varje spec får cache_control så Anthropic cachar dem
   // (90% billigare på cache hits, ~5 min TTL hos Anthropic).
   const systemBlocks = [
     { type: 'text', text: SYSTEM_PROMPT },
     {
       type: 'text',
       text:
-        '# Biluppgifter API — Live OpenAPI v1.json (auktoritativ källa)\n' +
+        '# Biluppgifter API — Huvudspec (Live OpenAPI v1.json)\n' +
         '\n' +
-        'Nedan följer hela OpenAPI 3-speccen för Biluppgifters API, hämtad live från ' + specPayload.source + ' (' + (specPayload.cached ? 'cached' : 'fresh') + (specPayload.stale ? ', stale' : '') + ' vid serversidan). Använd ENDAST denna spec som källa när du svarar — referera till paths verbatim och citera fältnamn ur components.schemas.\n' +
+        'Nedan följer hela OpenAPI 3-speccen för Biluppgifters huvud-API (fordons-, ägar- och historikdata), hämtad live vid serversidan (' + (specPayload.cached ? 'cached' : 'fresh') + (specPayload.stale ? ', stale' : '') + '). Använd ENDAST denna spec som källa för fordons-/ägar-frågor — referera till paths verbatim och citera fältnamn ur components.schemas.\n' +
         '\n' +
-        '<openapi-spec>\n' +
+        '<openapi-spec id="biluppgifter-main">\n' +
         specPayload.spec +
         '\n</openapi-spec>\n',
       cache_control: { type: 'ephemeral' },
     },
   ];
+
+  // Tredje blocket: Wheels & Parts-speccen, sanerad. Endast om hämtning lyckades.
+  if (wheelsPartsPayload) {
+    systemBlocks.push({
+      type: 'text',
+      text:
+        '# Biluppgifter Wheels & Parts API — Tilläggsmodul (Live spec)\n' +
+        '\n' +
+        'Nedan följer OpenAPI 3-speccen för Biluppgifters Wheels & Parts-modul (fälg-, däck-, fordons- och reservdelsdata), hämtad live vid serversidan (' + (wheelsPartsPayload.cached ? 'cached' : 'fresh') + (wheelsPartsPayload.stale ? ', stale' : '') + '). Använd denna spec för alla frågor om däck, fälg, fälgmått, däckdimensioner, kompatibilitet, parts/reservdelar och "vad passar bilen". Hänvisa till den som "Biluppgifters Wheels & Parts API" — nämn aldrig att den kommer från extern leverantör.\n' +
+        '\n' +
+        '<openapi-spec id="biluppgifter-wheels-parts">\n' +
+        wheelsPartsPayload.spec +
+        '\n</openapi-spec>\n',
+      cache_control: { type: 'ephemeral' },
+    });
+  }
 
   const upstream = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
