@@ -319,8 +319,11 @@ async function verifySessionToken(token) {
 
 // Sonnet följer "gissa inte"-instruktioner märkbart bättre än Haiku, som
 // är mest benägen att fylla luckor med träningsdata. För grundningskritiska
-// svar är det värt skillnaden. Bekräfta strängen mot ditt konto.
-const MODEL = 'claude-sonnet-4-6';
+// svar är det värt skillnaden.
+// Sonnet 5: bättre grundning i lång kontext än 4.6 (viktigt med två stora
+// specer i systemprompten), kampanjpris $2/$10 per MTok t.o.m. 31 aug 2026.
+// OBS: skicka INTE temperature-parametern — den är utfasad för Sonnet 5.
+const MODEL = 'claude-sonnet-5';
 
 export default async function handler(req) {
   if (req.method !== 'POST') {
