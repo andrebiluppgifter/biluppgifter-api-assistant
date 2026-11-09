@@ -856,6 +856,7 @@ async function sendMessage(text) {
         max_tokens: 4096,
         system: SYSTEM_PROMPT,
         stream: true,
+        cache_control: { type: 'ephemeral' },
         messages: state.messages,
       }),
     });
@@ -885,6 +886,10 @@ async function sendMessage(text) {
         if (data === '[DONE]') continue;
         try {
           const obj = JSON.parse(data);
+          if (obj.type === 'message_start') {
+            const u = obj.message?.usage || {};
+            console.log('usage | input:', u.input_tokens, '| cache_creation:', u.cache_creation_input_tokens, '| cache_read:', u.cache_read_input_tokens);
+          }
           if (obj.type === 'content_block_delta' && obj.delta?.type === 'text_delta') {
             fullText += obj.delta.text;
             bubble.innerHTML = renderMarkdown(fullText);

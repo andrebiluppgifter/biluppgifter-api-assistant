@@ -325,6 +325,40 @@ async function verifySessionToken(token) {
 // OBS: skicka INTE temperature-parametern — den är utfasad för Sonnet 5.
 const MODEL = 'claude-sonnet-5';
 
+// Släpper igenom SSE-strömmen oförändrad och loggar usage (inkl. cache-träffar)
+// från message_start / message_delta.
+function usageLogger() {
+  const decoder = new TextDecoder();
+  let buf = '';
+  const usage = {};
+  const scan = (line) => {
+    if (!line.startsWith('data: ')) return;
+    try {
+      const evt = JSON.parse(line.slice(6));
+      if (evt.type === 'message_start') Object.assign(usage, evt.message?.usage);
+      else if (evt.type === 'message_delta') Object.assign(usage, evt.usage);
+    } catch { /* ignorera ofullständiga rader */ }
+  };
+  return new TransformStream({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+      buf += decoder.decode(chunk, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      lines.forEach(scan);
+    },
+    flush() {
+      scan(buf);
+      console.log(
+        'usage | input:', usage.input_tokens ?? 0,
+        '| cache_creation:', usage.cache_creation_input_tokens ?? 0,
+        '| cache_read:', usage.cache_read_input_tokens ?? 0,
+        '| output:', usage.output_tokens ?? 0
+      );
+    },
+  });
+}
+
 export default async function handler(req) {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
@@ -424,7 +458,7 @@ export default async function handler(req) {
       text:
         '# Biluppgifter API — Huvudspec (Live OpenAPI v1.json)\n' +
         '\n' +
-        'Nedan följer hela OpenAPI 3-speccen för Biluppgifters huvud-API (fordons-, ägar- och historikdata), hämtad live vid serversidan (' + (specPayload.cached ? 'cached' : 'fresh') + (specPayload.stale ? ', stale' : '') + '). Använd ENDAST denna spec som källa för fordons-/ägar-frågor — referera till paths verbatim och citera fältnamn ur components.schemas.\n' +
+        'Nedan följer hela OpenAPI 3-speccen för Biluppgifters huvud-API (fordons-, ägar- och historikdata), hämtad live vid serversidan. Använd ENDAST denna spec som källa för fordons-/ägar-frågor — referera till paths verbatim och citera fältnamn ur components.schemas.\n' +
         '\n' +
         '<openapi-spec id="biluppgifter-main">\n' +
         specPayload.spec +
@@ -440,7 +474,7 @@ export default async function handler(req) {
       text:
         '# Biluppgifter Wheels & Parts API — Tilläggsmodul (Live spec)\n' +
         '\n' +
-        'Nedan följer OpenAPI 3-speccen för Biluppgifters Wheels & Parts-modul (fälg-, däck-, fordons- och reservdelsdata), hämtad live vid serversidan (' + (wheelsPartsPayload.cached ? 'cached' : 'fresh') + (wheelsPartsPayload.stale ? ', stale' : '') + '). Använd denna spec för alla frågor om däck, fälg, fälgmått, däckdimensioner, kompatibilitet, parts/reservdelar och "vad passar bilen". Hänvisa till den som "Biluppgifters Wheels & Parts API" — nämn aldrig att den kommer från extern leverantör.\n' +
+        'Nedan följer OpenAPI 3-speccen för Biluppgifters Wheels & Parts-modul (fälg-, däck-, fordons- och reservdelsdata), hämtad live vid serversidan. Använd denna spec för alla frågor om däck, fälg, fälgmått, däckdimensioner, kompatibilitet, parts/reservdelar och "vad passar bilen". Hänvisa till den som "Biluppgifters Wheels & Parts API" — nämn aldrig att den kommer från extern leverantör.\n' +
         '\n' +
         '<openapi-spec id="biluppgifter-wheels-parts">\n' +
         wheelsPartsPayload.spec +
@@ -462,6 +496,8 @@ export default async function handler(req) {
       max_tokens: 4096,
       system: systemBlocks,
       stream: true,
+      // Automatisk breakpoint på sista blocket — cachar även konversationshistoriken mellan turer.
+      cache_control: { type: 'ephemeral' },
       messages: sanitizedMessages,
     }),
   });
@@ -477,7 +513,7 @@ export default async function handler(req) {
     });
   }
 
-  return new Response(upstream.body, {
+  return new Response(upstream.body.pipeThrough(usageLogger()), {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
